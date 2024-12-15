@@ -1,0 +1,17 @@
+.search-container {
+    display: flex;
+    margin-bottom: 20px;
+  }
+  
+  .results-container {
+    margin-top: 20px;
+  }
+  
+  #results-list {
+    list-style-type: none;
+    padding: 0;
+  }
+  
+  #results-list li {
+    margin-bottom: 10px;
+  }
