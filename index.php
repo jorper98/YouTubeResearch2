@@ -2,7 +2,7 @@
 /**
  * AppName: YouTube Reseach Tool
  * Description: PHP Script search YouTube Videos, Display info on Channel  
- * Version: 2.1.3
+ * Version: 2.1.4
  * Author: Jorge Pereira
  */
 
@@ -77,15 +77,26 @@ class YouTubeSearch {
         return $this->appInfo;
     }
     
-    public function search($query) {
+    public function search($query, $order = 'date') {
         try {
+            // Map frontend sort options to YouTube API parameters
+            $orderMap = [
+                'newest' => 'date',
+                'oldest' => 'date',  // We'll reverse the results for oldest
+                'views' => 'viewCount'
+            ];
+               // Use mapped order or default to date
+               $apiOrder = isset($orderMap[$order]) ? $orderMap[$order] : 'date';
+
             // First get the video IDs from search
             $searchResponse = $this->youtube->search->listSearch('id,snippet', [
                 'q' => $query,
                 'maxResults' => 10,
-                'type' => 'video'
+                'type' => 'video',
+                'order' => $apiOrder
             ]);
             
+  
             // Collect video IDs
             $videoIds = [];
             foreach ($searchResponse->getItems() as $item) {
@@ -112,6 +123,11 @@ class YouTubeSearch {
                     'viewCount' => number_format($item->getStatistics()->getViewCount()),
                     'likeCount' => number_format($item->getStatistics()->getLikeCount())
                 ];
+            }
+
+            // If oldest is selected, reverse the array
+            if ($order === 'oldest') {
+                $videos = array_reverse($videos);
             }
             
             return ['success' => true, 'data' => $videos];
@@ -297,13 +313,13 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
     strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
     
     header('Content-Type: application/json');
-
     
     try {
         $youtubeSearch = new YouTubeSearch($config['youtube_api_key']);
         
         if (isset($_GET['query'])) {
-            echo json_encode($youtubeSearch->search($_GET['query']));
+            $order = isset($_GET['order']) ? $_GET['order'] : 'newest';
+            echo json_encode($youtubeSearch->search($_GET['query'], $order));
         } elseif (isset($_GET['channelId'])) {
             echo json_encode($youtubeSearch->getChannelInfo($_GET['channelId']));
         } elseif (isset($_GET['channelPlaylists'])) {
@@ -333,6 +349,36 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
     <link rel="stylesheet" href="style.css">
     <style>
        /* future Use */
+
+       #sort-order {
+    padding: 8px;
+    margin: 0 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: white;
+    font-size: 14px;
+}
+
+.search-container {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    align-items: center;
+    margin: 20px 0;
+}
+
+@media (max-width: 600px) {
+    .search-container {
+        flex-direction: column;
+    }
+    
+    #sort-order {
+        width: 100%;
+        margin: 10px 0;
+    }
+}
+
+
     </style>
 </head>
 <body>
@@ -349,8 +395,13 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
         </div>
 </header>
 
-    <div class="search-container">
+<div class="search-container">
         <input type="text" id="search-input" placeholder="Search YouTube videos...">
+        <select id="sort-order">
+            <option value="newest">Most Recent</option>
+            <option value="oldest">Oldest First</option>
+            <option value="views">View Count</option>
+        </select>
         <button id="search-button">Search</button>
     </div>
     
@@ -385,9 +436,11 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
         // Wait for DOM to be fully loaded
         document.addEventListener('DOMContentLoaded', () => {
             // Cache DOM elements
+
             const elements = {
                 searchInput: document.getElementById('search-input'),
                 searchButton: document.getElementById('search-button'),
+                sortOrder: document.getElementById('sort-order'),
                 resultsList: document.getElementById('results-list'),
                 channelModal: document.getElementById('channel-modal'),
                 channelInfoContent: document.getElementById('channel-info-content'),
@@ -406,16 +459,19 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
 
             // Search functionality
             const performSearch = async () => {
-    const query = elements.searchInput.value.trim();
-    if (!query) return;
+                const query = elements.searchInput.value.trim();
+                if (!query) return;
 
-    try {
-        elements.resultsList.innerHTML = '<div class="searching">Searching...</div>';
-        const response = await fetch(`?query=${encodeURIComponent(query)}`, {
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        });
+                try {
+                    elements.resultsList.innerHTML = '<div class="searching">Searching...</div>';
+                    const response = await fetch(
+                        `?query=${encodeURIComponent(query)}&order=${elements.sortOrder.value}`,
+                        {
+                            headers: {
+                                'X-Requested-With': 'XMLHttpRequest'
+                            }
+                        }
+                    );
         
         const data = await response.json();
 
@@ -461,12 +517,13 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
             elements.resultsList.appendChild(li);
         });
     } catch (error) {
-        console.error('Search error:', error);
-        elements.resultsList.innerHTML = `
-            <div class="error">Error fetching results: ${error.message}</div>
-        `;
-    }
+                    console.error('Search error:', error);
+                    elements.resultsList.innerHTML = `
+                        <div class="error">Error fetching results: ${error.message}</div>
+                    `;
+                }
 };
+
 
 
 const getChannelInfo = async (channelId) => {
@@ -478,7 +535,7 @@ const getChannelInfo = async (channelId) => {
                 'X-Requested-With': 'XMLHttpRequest'
             }
         });
-        
+           elements.sortOrder.addEventListener('change', performSearch);
         const data = await response.json();
 
         if (!data.success) {
@@ -505,6 +562,7 @@ const getChannelInfo = async (channelId) => {
                 Visit Channel
             </a>
         `;
+        
         
         // Add event listeners for both playlist and video count links
         const playlistLink = elements.channelInfoContent.querySelector('.playlist-link');
@@ -688,7 +746,10 @@ const showPlaylists = async (channelId) => {
 
 
             // Event listeners
+             
+ 
             elements.searchButton.addEventListener('click', performSearch);
+            elements.sortOrder.addEventListener('change', performSearch); // event listener for sort order change
             
             elements.searchInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
