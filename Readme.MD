@@ -28,6 +28,12 @@ This script is free software; you can redistribute it and/or modify it under the
 # Changelog
 
 All notable changes  will be documented in this file
+
+## V2.1.5
+* Increase results to 100 (from 10)  API max is 100.
+* Misc clean up code.
+
+
 ## Version: 2.1.4
 * First Public version  on GitHub 
 ** 

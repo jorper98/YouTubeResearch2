@@ -2,7 +2,7 @@
 /**
  * AppName: YouTube Reseach Tool
  * Description: PHP Script search YouTube Videos, Display info on Channel  
- * Version: 2.1.4
+ * Version: 2.1.5
  * Author: Jorge Pereira
  */
 
@@ -77,64 +77,97 @@ class YouTubeSearch {
         return $this->appInfo;
     }
     
-    public function search($query, $order = 'date') {
+    public function search(string $query, string $order = 'date'): array {
         try {
-            // Map frontend sort options to YouTube API parameters
+            // Map frontend sort options to valid YouTube API parameters
             $orderMap = [
-                'newest' => 'date',
-                'oldest' => 'date',  // We'll reverse the results for oldest
-                'views' => 'viewCount'
+                'newest' => 'date',        // Most recent first (default)
+                'oldest' => 'date',        // We'll reverse results for oldest
+                'views' => 'viewCount',    // Most views first
+                'date' => 'date',          // Fallback for direct API parameter
+                'viewCount' => 'viewCount' // Fallback for direct API parameter
             ];
-               // Use mapped order or default to date
-               $apiOrder = isset($orderMap[$order]) ? $orderMap[$order] : 'date';
-
-            // First get the video IDs from search
+            
+            // Use mapped order or default to 'date'
+            $apiOrder = isset($orderMap[$order]) ? $orderMap[$order] : 'date';
+            
+            // Search for both videos and channels
+            // Note:  So each search could use around 150-200 quota points out of your daily 10,000. 
             $searchResponse = $this->youtube->search->listSearch('id,snippet', [
                 'q' => $query,
-                'maxResults' => 10,
-                'type' => 'video',
+                'maxResults' => 50,
+                'type' => 'video,channel',
                 'order' => $apiOrder
             ]);
             
-  
-            // Collect video IDs
+            $results = [
+                'videos' => [],
+                'channels' => []
+            ];
+    
             $videoIds = [];
+    
+            // Process search results and separate videos and channels
             foreach ($searchResponse->getItems() as $item) {
-                $videoIds[] = $item->getId()->getVideoId();
+                if ($item->getId()->getKind() === 'youtube#video') {
+                    // Add to video IDs for detailed info
+                    $videoIds[] = $item->getId()->getVideoId();
+                } elseif ($item->getId()->getKind() === 'youtube#channel') {
+                    // Get channel details
+                    $channelResponse = $this->youtube->channels->listChannels(
+                        'snippet,statistics',
+                        ['id' => $item->getId()->getChannelId()]
+                    );
+                    
+                    if (!empty($channelResponse->getItems())) {
+                        $channel = $channelResponse->getItems()[0];
+                        $results['channels'][] = [
+                            'id' => $channel->getId(),
+                            'title' => htmlspecialchars($channel->getSnippet()->getTitle()),
+                            'description' => htmlspecialchars($channel->getSnippet()->getDescription()),
+                            'thumbnail' => $channel->getSnippet()->getThumbnails()->getMedium()->getUrl(),
+                            'subscriberCount' => number_format($channel->getStatistics()->getSubscriberCount()),
+                            'videoCount' => number_format($channel->getStatistics()->getVideoCount()),
+                            'viewCount' => number_format($channel->getStatistics()->getViewCount()),
+                            'link' => 'https://www.youtube.com/channel/' . $channel->getId()
+                        ];
+                    }
+                }
+            }
+    
+            // Get detailed video information if we have any videos
+            if (!empty($videoIds)) {
+                $videosResponse = $this->youtube->videos->listVideos(
+                    'snippet,statistics',
+                    ['id' => implode(',', $videoIds)]
+                );
+                
+                foreach ($videosResponse->getItems() as $item) {
+                    $results['videos'][] = [
+                        'title' => htmlspecialchars($item->getSnippet()->getTitle()),
+                        'description' => htmlspecialchars($item->getSnippet()->getDescription()),
+                        'channelTitle' => htmlspecialchars($item->getSnippet()->getChannelTitle()),
+                        'channelId' => $item->getSnippet()->getChannelId(),
+                        'videoId' => $item->getId(),
+                        'link' => 'https://www.youtube.com/watch?v=' . $item->getId(),
+                        'thumbnail' => $item->getSnippet()->getThumbnails()->getMedium()->getUrl(),
+                        'publishedAt' => date('F j, Y', strtotime($item->getSnippet()->getPublishedAt())),
+                        'viewCount' => number_format($item->getStatistics()->getViewCount()),
+                        'likeCount' => number_format($item->getStatistics()->getLikeCount())
+                    ];
+                }
+    
+                // If oldest is selected, reverse the video array
+                if ($order === 'oldest') {
+                    $results['videos'] = array_reverse($results['videos']);
+                }
             }
             
-            // Get detailed video information including statistics
-            $videosResponse = $this->youtube->videos->listVideos(
-                'snippet,statistics',
-                ['id' => implode(',', $videoIds)]
-            );
-            
-            $videos = [];
-            foreach ($videosResponse->getItems() as $item) {
-                $videos[] = [
-                    'title' => htmlspecialchars($item->getSnippet()->getTitle()),
-                    'description' => htmlspecialchars($item->getSnippet()->getDescription()),
-                    'channelTitle' => htmlspecialchars($item->getSnippet()->getChannelTitle()),
-                    'channelId' => $item->getSnippet()->getChannelId(),
-                    'videoId' => $item->getId(),
-                    'link' => 'https://www.youtube.com/watch?v=' . $item->getId(),
-                    'thumbnail' => $item->getSnippet()->getThumbnails()->getMedium()->getUrl(),
-                    'publishedAt' => date('F j, Y', strtotime($item->getSnippet()->getPublishedAt())),
-                    'viewCount' => number_format($item->getStatistics()->getViewCount()),
-                    'likeCount' => number_format($item->getStatistics()->getLikeCount())
-                ];
-            }
-
-            // If oldest is selected, reverse the array
-            if ($order === 'oldest') {
-                $videos = array_reverse($videos);
-            }
-            
-            return ['success' => true, 'data' => $videos];
+            return ['success' => true, 'data' => $results];
         } catch (Exception $e) {
             return ['success' => false, 'error' => $e->getMessage()];
         }
-    }
+    } 
     public function getChannelInfo($channelId) {
         try {
             // Get channel details
@@ -349,36 +382,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
     <link rel="stylesheet" href="style.css">
     <style>
        /* future Use */
-
-       #sort-order {
-    padding: 8px;
-    margin: 0 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    background-color: white;
-    font-size: 14px;
-}
-
-.search-container {
-    display: flex;
-    gap: 10px;
-    justify-content: center;
-    align-items: center;
-    margin: 20px 0;
-}
-
-@media (max-width: 600px) {
-    .search-container {
-        flex-direction: column;
-    }
-    
-    #sort-order {
-        width: 100%;
-        margin: 10px 0;
-    }
-}
-
-
     </style>
 </head>
 <body>
@@ -459,20 +462,20 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
 
             // Search functionality
             const performSearch = async () => {
-                const query = elements.searchInput.value.trim();
-                if (!query) return;
+    const query = elements.searchInput.value.trim();
+    if (!query) return;
 
-                try {
-                    elements.resultsList.innerHTML = '<div class="searching">Searching...</div>';
-                    const response = await fetch(
-                        `?query=${encodeURIComponent(query)}&order=${elements.sortOrder.value}`,
-                        {
-                            headers: {
-                                'X-Requested-With': 'XMLHttpRequest'
-                            }
-                        }
-                    );
-        
+    try {
+        elements.resultsList.innerHTML = '<div class="searching">Searching...</div>';
+        const response = await fetch(
+            `?query=${encodeURIComponent(query)}&order=${elements.sortOrder.value}`,
+            {
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            }
+        );
+
         const data = await response.json();
 
         if (!data.success) {
@@ -481,47 +484,112 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
 
         elements.resultsList.innerHTML = '';
 
-        if (data.data.length === 0) {
+        // Check if we have any results at all
+        if (data.data.videos.length === 0 && data.data.channels.length === 0) {
             elements.resultsList.innerHTML = '<div class="error">No results found.</div>';
             return;
         }
 
-        data.data.forEach(video => {
-            const li = document.createElement('li');
-            li.className = 'video-item';
-            li.innerHTML = `
-                <div class="thumbnail">
-                    <img 
-                        src="${video.thumbnail}" 
-                        alt="${video.title}"
-                        onerror="this.src='/api/placeholder/120/90'; this.onerror=null;"
-                    >
-                </div>
-                <div class="video-info">
-                    <h3><a href="${video.link}" target="_blank">${video.title}</a></h3>
-                    <div class="video-meta">
-                        <div class="video-stats">
-                            <span>${video.viewCount} views</span>
-                            <span class="separator">•</span>
-                            <span>${video.publishedAt}</span>
-                            <span class="separator">•</span>
-                            <span>${video.likeCount} likes</span>
+        // Display channels first if any exist
+        if (data.data.channels.length > 0) {
+            const channelsSection = document.createElement('div');
+            channelsSection.className = 'channels-section';
+            channelsSection.innerHTML = '<h2>Channels</h2>';
+            
+            const channelsList = document.createElement('ul');
+            channelsList.className = 'channels-list';
+
+            data.data.channels.forEach(channel => {
+                const li = document.createElement('li');
+                li.className = 'channel-item';
+                li.innerHTML = `
+                    <div class="channel-grid">
+                        <div class="channel-thumbnail">
+                            <img 
+                                src="${channel.thumbnail}" 
+                                alt="${channel.title}"
+                                onerror="this.src='/api/placeholder/120/120'; this.onerror=null;"
+                            >
                         </div>
-                        <div class="channel">
-                            <a class="channel-link" data-channel-id="${video.channelId}">${video.channelTitle}</a>
+                        <div class="channel-info">
+                            <h3><a href="${channel.link}" target="_blank">${channel.title}</a></h3>
+                            <div class="channel-stats">
+                                <span>${channel.subscriberCount} subscribers</span>
+                                <span class="separator">•</span>
+                                <span>${channel.videoCount} videos</span>
+                                <span class="separator">•</span>
+                                <span>${channel.viewCount} views</span>
+                            </div>
+                            <p class="description">${channel.description}</p>
+                            <button class="view-channel-info" data-channel-id="${channel.id}">View Channel Info</button>
                         </div>
                     </div>
-                    <p class="description">${video.description}</p>
-                </div>
-            `;
-            elements.resultsList.appendChild(li);
+                `;
+                channelsList.appendChild(li);
+            });
+
+            channelsSection.appendChild(channelsList);
+            elements.resultsList.appendChild(channelsSection);
+        }
+
+        // Display videos section if any exist
+        if (data.data.videos.length > 0) {
+            const videosSection = document.createElement('div');
+            videosSection.className = 'videos-section';
+            videosSection.innerHTML = '<h2>Videos</h2>';
+
+            const videosList = document.createElement('ul');
+            videosList.className = 'videos-list';
+
+            data.data.videos.forEach(video => {
+                const li = document.createElement('li');
+                li.className = 'video-item';
+                li.innerHTML = `
+                    <div class="thumbnail">
+                        <img 
+                            src="${video.thumbnail}" 
+                            alt="${video.title}"
+                            onerror="this.src='/api/placeholder/120/90'; this.onerror=null;"
+                        >
+                    </div>
+                    <div class="video-info">
+                        <h3><a href="${video.link}" target="_blank">${video.title}</a></h3>
+                        <div class="video-meta">
+                            <div class="video-stats">
+                                <span>${video.viewCount} views</span>
+                                <span class="separator">•</span>
+                                <span>${video.publishedAt}</span>
+                                <span class="separator">•</span>
+                                <span>${video.likeCount} likes</span>
+                            </div>
+                            <div class="channel">
+                                <a class="channel-link" data-channel-id="${video.channelId}">${video.channelTitle}</a>
+                            </div>
+                        </div>
+                        <p class="description">${video.description}</p>
+                    </div>
+                `;
+                videosList.appendChild(li);
+            });
+
+            videosSection.appendChild(videosList);
+            elements.resultsList.appendChild(videosSection);
+        }
+
+        // Add event listener for the new channel info buttons
+        document.querySelectorAll('.view-channel-info').forEach(button => {
+            button.addEventListener('click', () => {
+                getChannelInfo(button.dataset.channelId);
+            });
         });
+
     } catch (error) {
-                    console.error('Search error:', error);
-                    elements.resultsList.innerHTML = `
-                        <div class="error">Error fetching results: ${error.message}</div>
-                    `;
-                }
+        console.error('Search error:', error);
+        elements.resultsList.innerHTML = `
+            <div class="error">Error fetching results: ${error.message}</div>
+        `;
+    }
+
 };
 
 
